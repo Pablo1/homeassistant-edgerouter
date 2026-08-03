@@ -230,6 +230,7 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
+        data = hass.data[DOMAIN].pop(entry.entry_id)
+        await hass.async_add_executor_job(data["api"].close)
 
     return unload_ok

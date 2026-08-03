@@ -98,6 +98,10 @@ class EdgeRouterConfigFlow(ConfigFlow, domain=DOMAIN):
                 except Exception:  # pylint: disable=broad-except
                     _LOGGER.exception("Unexpected exception")
                     errors["base"] = "unknown"
+                finally:
+                    # This api instance is only used for validation; the real one
+                    # created in async_setup_entry gets its own persistent connection.
+                    await self.hass.async_add_executor_job(api.close)
 
         return self.async_show_form(
             step_id="user",

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -200,6 +201,8 @@ class EdgeRouterAPI:
         self.port = port
         self.timeout = timeout
         self.key_filename = key_filename
+        self._client: paramiko.SSHClient | None = None
+        self._lock = threading.Lock()
 
     def _connect(self) -> paramiko.SSHClient:
         """Open and return an authenticated SSH connection."""
@@ -235,17 +238,50 @@ class EdgeRouterAPI:
             raise EdgeRouterConnectionError(
                 f"Network error connecting to {self.host}: {err}"
             ) from err
+        transport = client.get_transport()
+        if transport is not None:
+            # Keep the socket alive across the idle gap between poll cycles so a
+            # NAT/firewall timeout doesn't silently drop it before we notice.
+            transport.set_keepalive(15)
         return client
+
+    def _close_client_locked(self) -> None:
+        """Close and forget the persistent connection. Caller must hold self._lock."""
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:  # noqa: BLE001 - best-effort cleanup
+                pass
+            self._client = None
+
+    def close(self) -> None:
+        """Close the persistent SSH connection, if any."""
+        with self._lock:
+            self._close_client_locked()
+
+    def _get_client_locked(self) -> paramiko.SSHClient:
+        """Return the persistent connection, reconnecting if it has dropped."""
+        if self._client is not None:
+            transport = self._client.get_transport()
+            if transport is not None and transport.is_active():
+                return self._client
+            self._close_client_locked()
+        self._client = self._connect()
+        _LOGGER.debug("Connected to EdgeRouter at %s", self.host)
+        return self._client
 
     @contextmanager
     def _connection(self):
-        """Open one SSH connection, yield it, and close it on exit."""
-        client = self._connect()
-        _LOGGER.debug("Connected to EdgeRouter at %s", self.host)
-        try:
-            yield client
-        finally:
-            client.close()
+        """Yield the persistent SSH connection, reconnecting only if needed.
+
+        The connection is kept open across calls instead of being torn down and
+        re-established every time, since a fresh SSH handshake is the expensive
+        part of each poll. Held for the whole `with` block so a poll cycle
+        (several commands run back to back) can't interleave with another
+        thread reconnecting the same client.
+        """
+        with self._lock:
+            yield self._get_client_locked()
 
     def _run_command(self, client: paramiko.SSHClient, command: str) -> str:
         """Run a vyatta-wrapped operational command on an already-open client."""
@@ -257,7 +293,8 @@ class EdgeRouterAPI:
             if error:
                 _LOGGER.warning("Command '%s' produced stderr: %s", command, error)
             return output
-        except paramiko.SSHException as err:
+        except (paramiko.SSHException, OSError) as err:
+            self._close_client_locked()
             raise EdgeRouterConnectionError(
                 f"SSH error running '{command}' on {self.host}: {err}"
             ) from err
@@ -271,7 +308,8 @@ class EdgeRouterAPI:
             if error:
                 _LOGGER.warning("Raw command produced stderr: %s", error)
             return output
-        except paramiko.SSHException as err:
+        except (paramiko.SSHException, OSError) as err:
+            self._close_client_locked()
             raise EdgeRouterConnectionError(
                 f"SSH error running command on {self.host}: {err}"
             ) from err
@@ -483,7 +521,8 @@ class EdgeRouterAPI:
         multiple interface keys when it has reservations on more than one VLAN.
         Interface is an empty string when it cannot be determined.
 
-        Opens exactly one SSH connection per call and runs all 7 data sources on it.
+        Runs all 7 data sources over the persistent SSH connection, reconnecting
+        only if it has dropped since the previous poll.
         """
         clients: dict[tuple[str, str], ClientInfo] = {}
         now = datetime.now()

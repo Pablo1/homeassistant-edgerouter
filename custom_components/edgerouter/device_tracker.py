@@ -23,7 +23,6 @@ from .const import (
     ATTR_IPV6_DUID,
     ATTR_IPV6_LEASE_ENDS,
     ATTR_IPV6_LEASE_STATE,
-    ATTR_LAST_SEEN,
     ATTR_LEASE_EXPIRES,
     DOMAIN,
 )
@@ -193,8 +192,6 @@ class EdgeRouterDeviceTracker(CoordinatorEntity, ScannerEntity):
                 attrs[ATTR_INTERFACE] = client.interface
             if client.lease_expires:
                 attrs[ATTR_LEASE_EXPIRES] = client.lease_expires
-            if self._last_seen:
-                attrs[ATTR_LAST_SEEN] = self._last_seen.isoformat()
 
             # IPv4 connection type: how the device is known to the router
             if client.has_dhcp_lease:

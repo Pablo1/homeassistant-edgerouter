@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -110,7 +109,7 @@ class EdgeRouterConnectedDevicesSensor(EdgeRouterBaseSensor):
                     ),
                     "ipv6_connection_type": c.ipv6_connection_type,
                 })
-        return {"devices": devices, "last_poll": datetime.now().isoformat()}
+        return {"devices": devices}
 
 
 class EdgeRouterIPv4ConnectedSensor(EdgeRouterBaseSensor):
